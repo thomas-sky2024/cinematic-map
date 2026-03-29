@@ -9,6 +9,7 @@ interface MapState {
   mapToken: string;
   mapStyleId: string;
   mapRef: maplibregl.Map | null;
+  terrainEnabled: boolean;
 
   // Keyframes
   keyframes: Keyframe[];
@@ -28,6 +29,7 @@ interface MapState {
   setMapRef: (map: maplibregl.Map | null) => void;
   setMapToken: (token: string) => void;
   setMapStyle: (styleId: string) => void;
+  setTerrainEnabled: (v: boolean) => void;
 
   // Actions — Keyframes
   captureKeyframe: () => void;
@@ -36,6 +38,7 @@ interface MapState {
   reorderKeyframes: (fromIdx: number, toIdx: number) => void;
   selectKeyframe: (id: string | null) => void;
   setTotalDuration: (seconds: number) => void;
+  importConfig: (jsonStr: string) => void;
 
   // Actions — Playback
   setCurrentTime: (t: number) => void;
@@ -58,6 +61,7 @@ export const useMapStore = create<MapState>()(
       mapToken: "",
       mapStyleId: "dark",
       mapRef: null,
+      terrainEnabled: false,
       keyframes: [],
       selectedKeyframeId: null,
       totalDuration: 10,
@@ -71,6 +75,7 @@ export const useMapStore = create<MapState>()(
       setMapRef: (map) => set({ mapRef: map }),
       setMapToken: (token) => set({ mapToken: token }),
       setMapStyle: (styleId) => set({ mapStyleId: styleId }),
+      setTerrainEnabled: (v) => set({ terrainEnabled: v }),
 
       // Keyframe actions
       captureKeyframe: () => {
@@ -129,15 +134,34 @@ export const useMapStore = create<MapState>()(
 
       reorderKeyframes: (fromIdx, toIdx) =>
         set((s) => {
-          const kfs = [...s.keyframes];
-          const [moved] = kfs.splice(fromIdx, 1);
-          kfs.splice(toIdx, 0, moved);
-          // Re-sort by time after drag
-          return { keyframes: kfs };
+          const sorted = [...s.keyframes].sort((a, b) => a.time - b.time);
+          const [moved] = sorted.splice(fromIdx, 1);
+          sorted.splice(toIdx, 0, moved);
+          return { keyframes: sorted };
         }),
 
       selectKeyframe: (id) => set({ selectedKeyframeId: id }),
       setTotalDuration: (seconds) => set({ totalDuration: seconds }),
+
+      importConfig: (jsonStr) => {
+        try {
+          const config = JSON.parse(jsonStr);
+          if (!Array.isArray(config.keyframes)) throw new Error("Invalid config");
+          set({
+            keyframes: config.keyframes.map((kf: any) => ({
+              ...kf,
+              id: kf.id ?? uid(),
+              easing: kf.easing ?? "EaseInOut",
+            })),
+            totalDuration: config.totalDuration ?? 10,
+            fps: config.fps ?? 30,
+            selectedKeyframeId: null,
+          });
+        } catch (e) {
+          console.error("[cinematic-map] Failed to import config:", e);
+          alert("Invalid config file. Please check the JSON format.");
+        }
+      },
 
       // Playback
       setCurrentTime: (t) => set({ currentTime: t }),
@@ -154,6 +178,7 @@ export const useMapStore = create<MapState>()(
       partialize: (s) => ({
         mapToken: s.mapToken,
         mapStyleId: s.mapStyleId,
+        terrainEnabled: s.terrainEnabled,
         keyframes: s.keyframes,
         totalDuration: s.totalDuration,
         fps: s.fps,

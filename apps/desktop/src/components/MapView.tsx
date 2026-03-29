@@ -1,16 +1,58 @@
 import { useEffect, useRef, useCallback } from "react";
 import maplibregl from "maplibre-gl";
 import { useMapStore } from "../store/useMapStore";
-import { MAP_STYLES } from "../types";
+import { getStyleUrl, getTerrainUrl } from "../types";
 import { interpolateAt } from "../hooks/useTauri";
+
+// ── Terrain helpers ────────────────────────────────────────────────────────
+
+const TERRAIN_SOURCE_ID = "maplibre-terrain-dem";
+const SKY_LAYER_ID = "cinematic-sky";
+
+function applyTerrain(map: maplibregl.Map, token: string) {
+  if (!map.getSource(TERRAIN_SOURCE_ID)) {
+    map.addSource(TERRAIN_SOURCE_ID, {
+      type: "raster-dem",
+      url: getTerrainUrl(token),
+      tileSize: 256,
+    } as any);
+  }
+  (map as any).setTerrain({ source: TERRAIN_SOURCE_ID, exaggeration: 1.5 });
+
+  if (!map.getLayer(SKY_LAYER_ID)) {
+    map.addLayer({
+      id: SKY_LAYER_ID,
+      type: "sky",
+      paint: {
+        "sky-type": "atmosphere",
+        "sky-atmosphere-sun": [0.0, 0.0],
+        "sky-atmosphere-sun-intensity": 15,
+        "sky-atmosphere-color": "rgba(85, 151, 210, 1)",
+        "sky-atmosphere-halo-color": "rgba(255, 160, 89, 1)",
+      },
+    } as any);
+  }
+}
+
+function removeTerrain(map: maplibregl.Map) {
+  (map as any).setTerrain(null);
+  if (map.getLayer(SKY_LAYER_ID)) map.removeLayer(SKY_LAYER_ID);
+  if (map.getSource(TERRAIN_SOURCE_ID)) map.removeSource(TERRAIN_SOURCE_ID);
+}
+
+// ── Component ──────────────────────────────────────────────────────────────
 
 export function MapView() {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
   const animFrameRef = useRef<number>(0);
+  // Ref to avoid stale closure in animation loop
+  const currentTimeRef = useRef(0);
 
   const {
     mapStyleId,
+    mapToken,
+    terrainEnabled,
     keyframes,
     currentTime,
     isPlaying,
@@ -21,16 +63,20 @@ export function MapView() {
     totalDuration,
   } = useMapStore();
 
-  const style = MAP_STYLES.find((s) => s.id === mapStyleId) ?? MAP_STYLES[0];
+  useEffect(() => {
+    currentTimeRef.current = currentTime;
+  }, [currentTime]);
 
-  // Init map
+  const resolvedStyleUrl = getStyleUrl(mapStyleId, mapToken);
+
+  // ── Init map ────────────────────────────────────────────────────────────
   useEffect(() => {
     if (!containerRef.current || mapRef.current) return;
 
     const map = new maplibregl.Map({
       container: containerRef.current,
-      style: style.url,
-      center: [108.05, 12.66], // Buôn Ma Thuột default
+      style: resolvedStyleUrl,
+      center: [108.05, 12.66],
       zoom: 5,
       pitch: 0,
       bearing: 0,
@@ -42,6 +88,7 @@ export function MapView() {
     map.on("load", () => {
       mapRef.current = map;
       setMapRef(map as any);
+      if (terrainEnabled && mapToken) applyTerrain(map, mapToken);
     });
 
     return () => {
@@ -49,15 +96,63 @@ export function MapView() {
       mapRef.current = null;
       setMapRef(null);
     };
-  }, []); // only once
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-  // Update style when changed
+  // ── Style change ────────────────────────────────────────────────────────
   useEffect(() => {
-    if (!mapRef.current) return;
-    mapRef.current.setStyle(style.url);
-  }, [style.url]);
+    const map = mapRef.current;
+    if (!map) return;
+    map.setStyle(resolvedStyleUrl);
+    const onStyleLoad = () => {
+      if (terrainEnabled && mapToken) applyTerrain(map, mapToken);
+    };
+    map.once("style.load", onStyleLoad);
+    return () => { map.off("style.load", onStyleLoad); };
+  }, [resolvedStyleUrl]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Playback loop
+  // ── Terrain toggle ──────────────────────────────────────────────────────
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !map.isStyleLoaded()) return;
+    if (terrainEnabled && mapToken) {
+      applyTerrain(map, mapToken);
+    } else {
+      removeTerrain(map);
+    }
+  }, [terrainEnabled, mapToken]);
+
+  // ── Keyboard: Ctrl/Alt + arrows = pitch & bearing ───────────────────────
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      const map = mapRef.current;
+      if (!map || (!e.ctrlKey && !e.altKey)) return;
+      const PITCH_STEP = 5;
+      const BEARING_STEP = 10;
+      switch (e.key) {
+        case "ArrowUp":
+          e.preventDefault();
+          map.setPitch(Math.min(85, map.getPitch() + PITCH_STEP));
+          break;
+        case "ArrowDown":
+          e.preventDefault();
+          map.setPitch(Math.max(0, map.getPitch() - PITCH_STEP));
+          break;
+        case "ArrowLeft":
+          e.preventDefault();
+          map.setBearing(map.getBearing() - BEARING_STEP);
+          break;
+        case "ArrowRight":
+          e.preventDefault();
+          map.setBearing(map.getBearing() + BEARING_STEP);
+          break;
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
+
+  // ── Playback loop ───────────────────────────────────────────────────────
   useEffect(() => {
     if (!isPlaying) {
       cancelAnimationFrame(animFrameRef.current);
@@ -69,10 +164,9 @@ export function MapView() {
 
     const tick = async (timestamp: number) => {
       const elapsed = timestamp - lastTimestamp;
-
       if (elapsed >= frameDuration) {
         lastTimestamp = timestamp;
-        const nextTime = currentTime + elapsed / 1000;
+        const nextTime = currentTimeRef.current + elapsed / 1000;
 
         if (nextTime >= totalDuration) {
           setCurrentTime(totalDuration);
@@ -82,7 +176,6 @@ export function MapView() {
 
         setCurrentTime(nextTime);
 
-        // Move map to interpolated position
         if (mapRef.current && keyframes.length >= 2) {
           const cam = await interpolateAt(keyframes, nextTime);
           if (cam) {
@@ -95,15 +188,16 @@ export function MapView() {
           }
         }
       }
-
       animFrameRef.current = requestAnimationFrame(tick);
     };
 
     animFrameRef.current = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(animFrameRef.current);
-  }, [isPlaying, currentTime, keyframes, fps, totalDuration]);
+    // Intentionally excluded currentTime — we use currentTimeRef instead
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isPlaying, keyframes, fps, totalDuration]);
 
-  // Scrub to a time position (on timeline drag, not playing)
+  // ── Scrub to time ────────────────────────────────────────────────────────
   const scrubTo = useCallback(
     async (time: number) => {
       if (!mapRef.current || keyframes.length < 2) return;
@@ -120,31 +214,33 @@ export function MapView() {
     [keyframes]
   );
 
-  // Jump to specific keyframe
-  const jumpToKeyframe = useCallback((kfIndex: number) => {
-    const kf = keyframes[kfIndex];
-    if (!kf || !mapRef.current) return;
-    mapRef.current.flyTo({
-      center: [kf.lng, kf.lat],
-      zoom: kf.zoom,
-      pitch: kf.pitch,
-      bearing: kf.bearing,
-      duration: 800,
-    });
-    setCurrentTime(kf.time);
-  }, [keyframes]);
-
   return (
     <div className="relative flex-1 overflow-hidden bg-gray-950">
       {/* Map canvas */}
       <div ref={containerRef} className="absolute inset-0" />
 
-      {/* Overlay: current time badge */}
+      {/* Time badge */}
       <div className="absolute top-3 left-3 px-2.5 py-1 rounded-md bg-black/60 backdrop-blur-sm text-white text-xs font-mono tabular-nums">
         {currentTime.toFixed(1)}s / {totalDuration.toFixed(1)}s
       </div>
 
-      {/* Overlay: no keyframes hint */}
+      {/* Satellite/terrain token warning */}
+      {(mapStyleId === "satellite" || mapStyleId === "terrain") && !mapToken && (
+        <div className="absolute top-3 left-1/2 -translate-x-1/2 px-3 py-1.5 rounded-lg bg-amber-500/20 border border-amber-500/40 backdrop-blur-sm text-amber-300 text-xs flex items-center gap-2 whitespace-nowrap">
+          <span>⚠️</span>
+          <span>
+            <strong>{mapStyleId === "satellite" ? "Satellite" : "Terrain"}</strong>{" "}
+            requires a MapTiler API key — click <strong>API Key</strong> to add one.
+          </span>
+        </div>
+      )}
+
+      {/* Keyboard hint */}
+      <div className="absolute bottom-10 right-3 px-2 py-1 rounded bg-black/40 text-white/25 text-[10px] pointer-events-none select-none">
+        Ctrl+↑↓ Pitch · Ctrl+←→ Bearing
+      </div>
+
+      {/* No keyframes hint */}
       {keyframes.length === 0 && (
         <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
           <div className="text-center text-white/40">

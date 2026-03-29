@@ -87,12 +87,15 @@ fn interpolate_at(kfs: &[Keyframe], t: f64, frame: u32) -> FrameCamera {
 
     let et = apply_easing(local_t, &from.easing);
 
-    // Zoom arc: long-distance travel zooms out in the middle → cinematic
+    // Zoom arc: only for CinematicArc easing — a subtle pull-back over very long distances.
+    // Intentionally NOT applied to EaseInOut/Linear to avoid unwanted altitude spikes.
     let dist_km = haversine_km(from.lat, from.lng, to.lat, to.lng);
-    let arc = if dist_km > 200.0 {
-        (local_t * std::f64::consts::PI).sin() * (dist_km / 600.0).min(3.5)
-    } else {
-        0.0
+    let arc = match &from.easing {
+        EasingType::CinematicArc if dist_km > 500.0 => {
+            // Gentle arc: max 1.5 zoom levels out, only for truly long hauls (>500 km)
+            (local_t * std::f64::consts::PI).sin() * (dist_km / 2000.0).min(1.5)
+        }
+        _ => 0.0,
     };
 
     FrameCamera {

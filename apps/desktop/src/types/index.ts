@@ -63,8 +63,16 @@ export const MAP_STYLES: MapStyle[] = [
   {
     id: "satellite",
     label: "Satellite",
-    url: "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json",
+    // Requires MapTiler token — resolved dynamically via getStyleUrl()
+    url: "https://api.maptiler.com/maps/satellite/style.json?key=",
     preview: "#2d4a22",
+  },
+  {
+    id: "terrain",
+    label: "Terrain",
+    // Requires MapTiler token — resolved dynamically via getStyleUrl()
+    url: "https://api.maptiler.com/maps/outdoor-v2/style.json?key=",
+    preview: "#4a7c59",
   },
   {
     id: "positron",
@@ -73,3 +81,24 @@ export const MAP_STYLES: MapStyle[] = [
     preview: "#f5f5f0",
   },
 ];
+
+/** Returns the resolved tile URL for a style, injecting the MapTiler token when needed. */
+export function getStyleUrl(styleId: string, token: string): string {
+  const tokenStyles = new Set(["satellite", "terrain"]);
+  const s = MAP_STYLES.find((st) => st.id === styleId) ?? MAP_STYLES[0];
+
+  if (tokenStyles.has(styleId)) {
+    if (!token) {
+      // Fallback to dark style when no token provided
+      console.warn(`[cinematic-map] Style "${styleId}" requires a MapTiler API key. Add one via the API Key button.`);
+      return MAP_STYLES[0].url;
+    }
+    return `${s.url}${token}`;
+  }
+  return s.url;
+}
+
+/** Returns the MapTiler terrain-rgb DEM tile URL. */
+export function getTerrainUrl(token: string): string {
+  return `https://api.maptiler.com/tiles/terrain-rgb-v2/tiles.json?key=${token}`;
+}
