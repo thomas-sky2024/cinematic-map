@@ -1,0 +1,48 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Scrollbar styling for dark theme */
+::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 2px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+/* MapLibre overrides for dark theme */
+.maplibregl-ctrl-group {
+  background: rgba(15, 23, 42, 0.9) !important;
+  border: 0.5px solid rgba(255, 255, 255, 0.1) !important;
+  backdrop-filter: blur(8px);
+}
+.maplibregl-ctrl-group button {
+  color: rgba(255, 255, 255, 0.6) !important;
+}
+.maplibregl-ctrl-group button:hover {
+  background: rgba(255, 255, 255, 0.08) !important;
+  color: white !important;
+}
+.maplibregl-ctrl-attrib {
+  background: rgba(0, 0, 0, 0.4) !important;
+  font-size: 9px !important;
+  color: rgba(255, 255, 255, 0.3) !important;
+}
+
+/* Remove focus outlines on map canvas */
+.maplibregl-canvas:focus {
+  outline: none;
+}
+
+/* Smooth transitions for panel elements */
+* {
+  -webkit-font-smoothing: antialiased;
+}

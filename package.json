@@ -1,0 +1,12 @@
+{
+  "name": "cinematic-map",
+  "private": true,
+  "scripts": {
+    "dev": "pnpm --filter desktop tauri dev",
+    "build": "pnpm --filter desktop tauri build",
+    "build:swift": "cd packages/swift-encoder && swift build -c release"
+  },
+  "devDependencies": {
+    "typescript": "~5.8.3"
+  }
+}
