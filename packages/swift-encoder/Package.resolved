@@ -1,6 +1,15 @@
 {
   "pins" : [
     {
+      "identity" : "maplibre-macos-distribution",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/fonok3/maplibre-macos-distribution.git",
+      "state" : {
+        "revision" : "517f1e319e05cf55d92ada78a2b76b7866783fec",
+        "version" : "6.23.0"
+      }
+    },
+    {
       "identity" : "swift-argument-parser",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/apple/swift-argument-parser",

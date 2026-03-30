@@ -1,14 +1,5 @@
 /**
- * map-capture — Cinematic Map Swift encoder
- *
- * FIXED bugs from previous version:
- *   ❌ CGWindowListCreateImage   → ✅ WKWebView.takeSnapshot()
- *      (CGWindowListCreateImage needs Screen Recording permission, can't read
- *       WebGL pixels through the sandbox, and causes the red fullscreen window)
- *   ❌ waitForIdle() never called → ✅ called before every snapshot
- *   ❌ ?key= always appended     → ✅ smart URL construction (no double-key)
- *   ❌ Window at (0,0) floating  → ✅ off-screen at negative coords, alpha=1
- *   ❌ 100ms fixed sleep         → ✅ callAsyncJavaScript awaits idle Promise
+ * swift-encoder-render — Unified MapLibre Native Renderer & HEVC Encoder
  */
 
 import Foundation
@@ -18,490 +9,239 @@ import VideoToolbox
 import CoreMedia
 import CoreVideo
 import AVFoundation
-import WebKit
 import AppKit
+import MapLibre
+import CoreLocation
+import ObjectiveC
 
-// ─────────────────────────────────────────────────────────────────────────────
-// MARK: - Types
-// ─────────────────────────────────────────────────────────────────────────────
+// MARK: - MapLibre CLI Compatibility Swizzles
 
-struct CameraParams: Codable {
-    let frame: Int; let time: Double
-    let lat: Double; let lng: Double
-    let zoom: Double; let pitch: Double; let bearing: Double
+extension Bundle {
+    static let swizzleForCLI: Void = {
+        let idOriginal = class_getInstanceMethod(Bundle.self, #selector(getter: Bundle.bundleIdentifier))
+        let idSwizzled = class_getInstanceMethod(Bundle.self, #selector(getter: Bundle.mock_bundleIdentifier))
+        if let id1 = idOriginal, let id2 = idSwizzled { 
+             method_exchangeImplementations(id1, id2) 
+        }
+        
+        let fwOriginal = class_getClassMethod(Bundle.self, NSSelectorFromString("mgl_frameworkBundle"))
+        let fwSwizzled = class_getClassMethod(Bundle.self, #selector(Bundle.mock_frameworkBundle))
+        if let fw1 = fwOriginal, let fw2 = fwSwizzled { 
+            method_exchangeImplementations(fw1, fw2) 
+        }
+    }()
+    @objc var mock_bundleIdentifier: String? { self == Bundle.main ? "com.cinematic.map.capture" : self.mock_bundleIdentifier }
+    @objc static func mock_frameworkBundle() -> Bundle {
+        let exeDir = Bundle.main.bundleURL.deletingLastPathComponent(); if let b = Bundle(url: exeDir.appendingPathComponent("MapLibre.framework")) { return b }
+        for b in Bundle.allFrameworks { if b.bundleIdentifier?.contains("maplibre") == true || b.bundleIdentifier?.contains("mapbox") == true { return b } }
+        return Bundle.main
+    }
 }
+
+// MARK: - Models (Aligned with Rust)
 
 struct Progress: Codable {
     let encoded: Int; let total: Int; let fps: Double; let stage: String
-    var error: String?
+}
+
+struct Keyframe: Codable {
+    let id: String; let label: String
+    let time, lat, lng, zoom, pitch, bearing: Double
+}
+
+struct RenderConfig: Codable {
+    let style: String; let points: [Keyframe]
+    let duration: Double; let fps, width, height: Int
 }
 
 func sendProgress(_ p: Progress) {
-    if let data = try? JSONEncoder().encode(p), let str = String(data: data, encoding: .utf8) {
-        fputs(str + "\n", stderr)
+    if let data = try? JSONEncoder().encode(p), let str = String(data: data, encoding: .utf8) { 
+        fputs(str + "\n", stderr) 
+        fflush(stderr)
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// MARK: - Style URL helper
-// ─────────────────────────────────────────────────────────────────────────────
+// MARK: - Math
 
-func resolveStyleURL(_ styleURL: String, token: String) -> String {
-    // CARTO and other free styles don't need a token — don't append key=
-    let needsToken = styleURL.contains("maptiler.com") || styleURL.contains("mapbox.com")
-
-    guard needsToken, !token.isEmpty else { return styleURL }
-
-    // Already has key= → don't add again
-    if styleURL.contains("key=") { return styleURL }
-
-    let sep = styleURL.contains("?") ? "&" : "?"
-    return "\(styleURL)\(sep)key=\(token)"
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// MARK: - Post-process (CoreImage + Metal)
-// ─────────────────────────────────────────────────────────────────────────────
-
-final class MetalPostProcess {
-    private let context: CIContext = {
-        if let dev = MTLCreateSystemDefaultDevice() {
-            return CIContext(mtlDevice: dev, options: [.workingColorSpace: NSNull()])
-        }
-        return CIContext()
-    }()
-
-    func process(cgImage: CGImage) -> CVPixelBuffer? {
-        var img = CIImage(cgImage: cgImage)
-
-        img = img.applyingFilter("CIVignette",        parameters: [kCIInputIntensityKey: 0.5,  kCIInputRadiusKey: 1.0])
-        img = img.applyingFilter("CIColorControls",   parameters: [kCIInputSaturationKey: 1.1, kCIInputBrightnessKey: -0.02, kCIInputContrastKey: 1.04])
-        img = img.applyingFilter("CITemperatureAndTint", parameters: ["inputNeutral": CIVector(x:6500,y:0), "inputTargetNeutral": CIVector(x:5700,y:0)])
-
-        let attrs: [String: Any] = [
-            kCVPixelBufferCGImageCompatibilityKey as String: true,
-            kCVPixelBufferCGBitmapContextCompatibilityKey as String: true,
-            kCVPixelBufferIOSurfacePropertiesKey as String: [:] as [String: Any],
-        ]
-        var pb: CVPixelBuffer?
-        CVPixelBufferCreate(nil, cgImage.width, cgImage.height, kCVPixelFormatType_32BGRA, attrs as CFDictionary, &pb)
-        guard let out = pb else { return nil }
-        context.render(img, to: out)
-        return out
+struct Interpolator {
+    static func easeInOutCubic(_ t: Double) -> Double { t < 0.5 ? 4 * t * t * t : 1 - pow(-2 * t + 2, 3) / 2 }
+    static func lerp(_ a: Double, _ b: Double, _ t: Double) -> Double { a + (b - a) * t }
+    static func lerpAngle(_ a: Double, _ b: Double, _ t: Double) -> Double {
+        var d = b - a; while d < -180 { d += 360 }; while d > 180 { d -= 360 }; return a + d * t
+    }
+    static func arcZoom(start: Double, end: Double, progress: Double, arcFactor: Double = 0.3) -> Double {
+        let base = lerp(start, end, progress)
+        let dip = 4 * progress * (1 - progress) * abs(end - start) * arcFactor
+        return base - dip
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// MARK: - HEVC encoder
-// ─────────────────────────────────────────────────────────────────────────────
+// MARK: - Encoder logic
 
 final class HEVCEncoder {
     private var session: VTCompressionSession?
-    private let width: Int32; private let height: Int32; private let fps: Int
-    private(set) var sampleBuffers: [CMSampleBuffer] = []
-    private let lock = NSLock()
-
-    init(width: Int, height: Int, fps: Int) {
-        self.width = Int32(width); self.height = Int32(height); self.fps = fps
-    }
-
+    private let width, height, fps: Int32; private(set) var sampleBuffers: [CMSampleBuffer] = []; private let lock = NSLock()
+    init(width: Int, height: Int, fps: Int) { self.width = Int32(width); self.height = Int32(height); self.fps = Int32(fps) }
     func setup() throws {
-        let spec: [String: Any] = [
-            kVTVideoEncoderSpecification_EnableHardwareAcceleratedVideoEncoder as String: true,
-            kVTVideoEncoderSpecification_RequireHardwareAcceleratedVideoEncoder as String: false,
-        ]
-        let st = VTCompressionSessionCreate(allocator: nil, width: width, height: height,
-            codecType: kCMVideoCodecType_HEVC, encoderSpecification: spec as CFDictionary,
-            imageBufferAttributes: nil, compressedDataAllocator: nil,
-            outputCallback: nil, refcon: nil, compressionSessionOut: &session)
-        guard st == noErr, let s = session else { throw EncErr.setup(st) }
-
-        VTSessionSetProperty(s, key: kVTCompressionPropertyKey_RealTime,               value: kCFBooleanFalse)
-        VTSessionSetProperty(s, key: kVTCompressionPropertyKey_ProfileLevel,            value: kVTProfileLevel_HEVC_Main_AutoLevel)
-        VTSessionSetProperty(s, key: kVTCompressionPropertyKey_AverageBitRate,          value: (width > 2000 ? 40_000_000 : 12_000_000) as CFTypeRef)
-        VTSessionSetProperty(s, key: kVTCompressionPropertyKey_AllowFrameReordering,    value: kCFBooleanTrue)
-        VTSessionSetProperty(s, key: kVTCompressionPropertyKey_MaxKeyFrameInterval,     value: fps * 2 as CFTypeRef)
+        let st = VTCompressionSessionCreate(allocator: nil, width: width, height: height, codecType: kCMVideoCodecType_HEVC, encoderSpecification: nil, imageBufferAttributes: nil, compressedDataAllocator: nil, outputCallback: nil, refcon: nil, compressionSessionOut: &session)
+        guard st == noErr, let s = session else { throw NSError(domain: "VT", code: Int(st)) }
+        VTSessionSetProperty(s, key: kVTCompressionPropertyKey_RealTime, value: kCFBooleanFalse)
+        VTSessionSetProperty(s, key: kVTCompressionPropertyKey_AverageBitRate, value: 50_000_000 as CFNumber) // High quality
         VTCompressionSessionPrepareToEncodeFrames(s)
     }
-
     func encodeFrame(_ pb: CVPixelBuffer, frameIndex: Int) {
         guard let s = session else { return }
-        let pts = CMTimeMake(value: Int64(frameIndex), timescale: Int32(fps))
-        let dur = CMTimeMake(value: 1, timescale: Int32(fps))
-        var fl = VTEncodeInfoFlags()
-        VTCompressionSessionEncodeFrame(s, imageBuffer: pb,
-            presentationTimeStamp: pts, duration: dur,
-            frameProperties: nil, infoFlagsOut: &fl) { [weak self] sts, _, sb in
-                guard sts == noErr, let sb else { return }
-                self?.lock.lock(); self?.sampleBuffers.append(sb); self?.lock.unlock()
+        let pts = CMTimeMake(value: Int64(frameIndex), timescale: fps)
+        VTCompressionSessionEncodeFrame(s, imageBuffer: pb, presentationTimeStamp: pts, duration: CMTimeMake(value: 1, timescale: fps), frameProperties: nil, infoFlagsOut: nil) { [weak self] sts, _, sb in
+            guard sts == noErr, let sb else { return }
+            self?.lock.lock(); self?.sampleBuffers.append(sb); self?.lock.unlock()
         }
     }
-
     func flush() { if let s = session { VTCompressionSessionCompleteFrames(s, untilPresentationTimeStamp: .invalid) } }
-
     func writeToFile(_ url: URL) throws {
-        guard let first = sampleBuffers.first,
-              let fmt   = CMSampleBufferGetFormatDescription(first) else {
-            throw EncErr.write("No frames encoded")
-        }
+        if sampleBuffers.isEmpty { throw NSError(domain: "AVWriter", code: -1, userInfo: [NSLocalizedDescriptionKey: "No frames captured"]) }
         let writer = try AVAssetWriter(outputURL: url, fileType: .mp4)
-        let input  = AVAssetWriterInput(mediaType: .video, outputSettings: nil, sourceFormatHint: fmt)
-        input.expectsMediaDataInRealTime = false
-        guard writer.canAdd(input) else { throw EncErr.write("Cannot add input") }
-        writer.add(input)
-        writer.startWriting()
-        writer.startSession(atSourceTime: .zero)
-
+        let input = AVAssetWriterInput(mediaType: .video, outputSettings: nil, sourceFormatHint: CMSampleBufferGetFormatDescription(sampleBuffers[0]))
+        writer.add(input); writer.startWriting(); writer.startSession(atSourceTime: .zero)
+        for sb in sampleBuffers {
+            while !input.isReadyForMoreMediaData { Thread.sleep(forTimeInterval: 0.01) }
+            input.append(sb)
+        }
+        input.markAsFinished()
         let sem = DispatchSemaphore(value: 0)
-        input.requestMediaDataWhenReady(on: DispatchQueue(label: "hevc.write")) {
-            for sb in self.sampleBuffers {
-                while !input.isReadyForMoreMediaData { Thread.sleep(forTimeInterval: 0.001) }
-                input.append(sb)
-            }
-            input.markAsFinished(); sem.signal()
-        }
+        writer.finishWriting { sem.signal() }
         sem.wait()
-
-        let dg = DispatchGroup(); dg.enter()
-        writer.finishWriting { dg.leave() }; dg.wait()
-
-        if writer.status != .completed {
-            throw writer.error ?? EncErr.write("AVAssetWriter status \(writer.status.rawValue)")
-        }
-    }
-
-    func teardown() { if let s = session { VTCompressionSessionInvalidate(s) }; session = nil }
-}
-
-enum EncErr: LocalizedError {
-    case setup(OSStatus), write(String)
-    var errorDescription: String? {
-        switch self { case .setup(let s): return "VT setup failed: \(s)"; case .write(let m): return m }
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// MARK: - WKWebView capture (takeSnapshot — NOT CGWindowListCreateImage)
-// ─────────────────────────────────────────────────────────────────────────────
+// MARK: - Renderer logic
 
-/**
- * The ONLY correct way to capture WebGL (MapLibre) content from WKWebView:
- *   WKWebView.takeSnapshot(with:completionHandler:)
- *
- * Why NOT CGWindowListCreateImage:
- *   - Requires Screen Recording entitlement / user permission
- *   - macOS security sandbox blocks reading WebGL pixel data via screen capture
- *   - Forces the window to be VISIBLE on screen (causing the red/black fullscreen)
- *   - Does not work headlessly
- *
- * Why NOT evaluateJavaScript for waiting idle:
- *   - Its callback fires when the Promise OBJECT is created, not when it resolves
- *   - Use callAsyncJavaScript instead — it properly awaits Promise resolution
- */
 @MainActor
-final class MapWebCapture: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
-    private let webView: WKWebView
-    private let width, height: Int
-    private var mapLoaded = false
-    private var loadCont: CheckedContinuation<Void, Never>?
-
-    init(width: Int, height: Int, styleURL: String, mapToken: String) {
-        _ = NSApplication.shared
-        self.width = width; self.height = height
-
-        let config = WKWebViewConfiguration()
-        let prefs  = WKWebpagePreferences()
-        prefs.allowsContentJavaScript = true
-        config.defaultWebpagePreferences = prefs
-
-        // Message handlers: mapLoaded (load signal) + mapConsole (JS log forwarding)
-        let handler = MessageProxy()
-        config.userContentController.add(handler, name: "mapLoaded")
-        config.userContentController.add(handler, name: "mapConsole")
-
-        let frame  = CGRect(x: 0, y: 0, width: width, height: height)
-        let web    = WKWebView(frame: frame, configuration: config)
-        self.webView = web
-
-        super.init()
-
-        handler.target = self
-        web.navigationDelegate = self
-
-        // ✅ Off-screen window at NEGATIVE coordinates.
-        //    - alpha = 1.0 (required for WebGL GPU context to stay active)
-        //    - .borderless + NO level override → stays behind everything
-        //    - NOT makeKeyAndOrderFront — that steals focus AND puts it on screen
-        //    - orderBack(nil) ensures it's in the WindowServer compositor tree
-        //      (necessary for WKWebView to render) without being visible
-        let win = NSWindow(
-            contentRect: CGRect(x: -(width + 100), y: -(height + 100),
-                                width: width, height: height),
-            styleMask: .borderless, backing: .buffered, defer: false
-        )
-        win.contentView    = web
-        win.backgroundColor = .black
-        win.isOpaque       = true
-        win.alphaValue     = 1.0
-        win.orderBack(nil)   // ← in compositor tree but NOT visible to user
-
-        // Build HTML with the corrected style URL
-        let resolvedStyle = resolveStyleURL(styleURL, token: mapToken)
-        fputs("[swift-encoder] Style URL: \(resolvedStyle)\n", stderr)
-        web.loadHTMLString(buildMapHTML(style: resolvedStyle, width: width, height: height),
-                           baseURL: nil)
+class MapRenderer: NSObject, MLNMapViewDelegate {
+    let mglView: MLNMapView; let window: NSWindow; private var mapLoaded = false
+    init(width: Int, height: Int) {
+        let f = NSRect(x: 0, y: 0, width: CGFloat(width), height: CGFloat(height))
+        window = NSWindow(contentRect: f, styleMask: .borderless, backing: .buffered, defer: false)
+        mglView = MLNMapView(frame: f); window.contentView = mglView; super.init(); mglView.delegate = self
+        mglView.wantsLayer = true
+        window.isReleasedWhenClosed = false; window.orderFrontRegardless()
     }
-
-    // ── WKScriptMessageHandler ────────────────────────────────────────────────
-    func userContentController(_ ucc: WKUserContentController, didReceive message: WKScriptMessage) {
-        switch message.name {
-        case "mapConsole":
-            if let s = message.body as? String { fputs("[js] \(s)\n", stderr) }
-        case "mapLoaded":
-            fputs("[swift-encoder] ✅ MapLibre 'load' received\n", stderr)
-            // Extra settle time: allow initial tiles to rasterise after load fires
-            Task { @MainActor in
-                try? await Task.sleep(nanoseconds: 1_200_000_000) // 1.2s
-                self.mapLoaded = true
-                self.loadCont?.resume(); self.loadCont = nil
+    func loadStyle(_ url: URL) async {
+        fputs("[swift-render] 📡 Loading style and tiles...\n", stderr)
+        mglView.styleURL = url; let start = Date()
+        while !mapLoaded { 
+            if Date().timeIntervalSince(start) > 90 { 
+                fputs("[swift-render] ⚠️ Timeout loading map tiles (90s). Proceeding anyway...\n", stderr)
+                break 
             }
-        default: break
+            RunLoop.main.run(until: Date(timeIntervalSinceNow: 1.0)) 
+            fputs("[swift-render] ... (waiting for tiles)\n", stderr)
+            fflush(stderr)
         }
+        if mapLoaded { fputs("[swift-render] ✅ Map and tiles loaded\n", stderr) }
+    }
+    func mapViewDidFinishLoadingMap(_ mapView: MLNMapView) { mapLoaded = true }
+    func mapViewDidFailLoadingMap(_ mapView: MLNMapView, withError error: Error) {
+        fputs("[swift-render] ❌ Map load failed: \(error.localizedDescription)\n", stderr)
     }
 
-    // ── Navigation delegate fallbacks ─────────────────────────────────────────
-    nonisolated func webView(_ wv: WKWebView, didFinish _: WKNavigation!) {
-        fputs("[swift-encoder] HTML loaded (waiting for MapLibre load event)\n", stderr)
-    }
-    nonisolated func webView(_ wv: WKWebView, didFail _: WKNavigation!, withError e: Error) {
-        fputs("[swift-encoder] ⚠️ Navigation failed: \(e)\n", stderr)
-        Task { @MainActor in self.mapLoaded = true; self.loadCont?.resume(); self.loadCont = nil }
-    }
-    nonisolated func webView(_ wv: WKWebView, didFailProvisionalNavigation _: WKNavigation!, withError e: Error) {
-        fputs("[swift-encoder] ⚠️ Provisional nav failed: \(e)\n", stderr)
-        Task { @MainActor in self.mapLoaded = true; self.loadCont?.resume(); self.loadCont = nil }
+    private func zoomToAltitude(_ zoom: Double, latitude: Double) -> Double {
+        return 40000000.0 / pow(2, zoom)
     }
 
-    // ── Wait for MapLibre 'load' ──────────────────────────────────────────────
-    func waitForLoad() async {
-        guard !mapLoaded else { return }
-        await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
-            self.loadCont = c
+    func updateCamera(lat: Double, lng: Double, zoom: Double, pitch: Double, bearing: Double) {
+        let cam = MLNMapCamera()
+        cam.centerCoordinate = CLLocationCoordinate2D(latitude: lat, longitude: lng)
+        cam.altitude = zoomToAltitude(zoom, latitude: lat)
+        cam.heading = bearing
+        cam.pitch = CGFloat(pitch)
+        mglView.setCamera(cam, animated: false)
+    }
+    func renderFrame() -> CVPixelBuffer? {
+        // Force display and pump the loop multiple times to ensure Metal draw is complete
+        mglView.display(); RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.1))
+        mglView.display(); RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.1))
+        
+        guard let b = mglView.bitmapImageRepForCachingDisplay(in: mglView.bounds) else { return nil }
+        mglView.cacheDisplay(in: mglView.bounds, to: b)
+        
+        var pb: CVPixelBuffer?
+        CVPixelBufferCreate(nil, Int(b.pixelsWide), Int(b.pixelsHigh), kCVPixelFormatType_32BGRA, nil, &pb)
+        if let pb = pb {
+            CVPixelBufferLockBaseAddress(pb, []); let dest = CVPixelBufferGetBaseAddress(pb)
+            let context = CGContext(data: dest, width: Int(b.pixelsWide), height: Int(b.pixelsHigh), bitsPerComponent: 8, bytesPerRow: CVPixelBufferGetBytesPerRow(pb), space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue)
+            if let cg = b.cgImage { context?.draw(cg, in: CGRect(x: 0, y: 0, width: b.size.width, height: b.size.height)) }
+            CVPixelBufferUnlockBaseAddress(pb, [])
         }
-    }
-
-    // ── Capture one frame via WKWebView.takeSnapshot ──────────────────────────
-    func captureFrame(camera: CameraParams) async -> CGImage? {
-        guard mapLoaded else { return nil }
-
-        // 1. Jump camera
-        let jumpJS = """
-        if (window.__map) {
-            window.__map.jumpTo({
-                center:  [\(camera.lng), \(camera.lat)],
-                zoom:    \(camera.zoom),
-                pitch:   \(camera.pitch),
-                bearing: \(camera.bearing)
-            });
-        }
-        """
-        // jumpTo is synchronous JS — evaluateJavaScript is sufficient
-        webView.evaluateJavaScript(jumpJS, completionHandler: nil)
-
-        // 2. ✅ Wait for idle — callAsyncJavaScript ACTUALLY awaits Promise.resolve()
-        //    (evaluateJavaScript fires callback when Promise *object* is created → wrong)
-        let idleJS = """
-        return new Promise(function(resolve) {
-            if (!window.__map) { resolve('no_map'); return; }
-            if (!window.__map.loaded()) { resolve('not_loaded'); return; }
-            if (window.__map.areTilesLoaded()) { resolve('ready'); return; }
-            window.__map.once('idle', function() { resolve('idle'); });
-            setTimeout(function() { resolve('timeout'); }, 4000);
-        });
-        """
-        let idleResult: Any? = try? await webView.callAsyncJavaScript(idleJS, arguments: [:], in: nil, in: .page)
-        let idleStr = idleResult.map { "\($0)" } ?? "nil"
-        fputs("[swift-encoder] idle: \(idleStr)\n", stderr)
-
-        // 3. GPU flush buffer — Metal needs time to composite WebGL → bitmap
-        try? await Task.sleep(nanoseconds: 150_000_000) // 150ms
-
-        // 4. ✅ WKWebView.takeSnapshot — the correct API for WebGL pixel readback
-        //    Does NOT need Screen Recording permission.
-        //    Works off-screen with the window in the compositor tree.
-        let snapCfg = WKSnapshotConfiguration()
-        snapCfg.rect         = CGRect(x: 0, y: 0, width: width, height: height)
-        snapCfg.snapshotWidth = NSNumber(value: width)
-
-        return await withCheckedContinuation { cont in
-            webView.takeSnapshot(with: snapCfg) { image, error in
-                if let err = error { fputs("[swift-encoder] snapshot error: \(err)\n", stderr) }
-                let cg = image?.cgImage(forProposedRect: nil, context: nil, hints: nil)
-                if cg == nil { fputs("[swift-encoder] ⚠️ nil CGImage from snapshot\n", stderr) }
-                cont.resume(returning: cg)
-            }
-        }
+        return pb
     }
 }
 
-// ── Weak proxy to avoid WKUserContentController retain cycle ─────────────────
-class MessageProxy: NSObject, WKScriptMessageHandler {
-    weak var target: WKScriptMessageHandler?
-    func userContentController(_ u: WKUserContentController, didReceive m: WKScriptMessage) {
-        target?.userContentController(u, didReceive: m)
-    }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// MARK: - HTML template
-// ─────────────────────────────────────────────────────────────────────────────
-
-func buildMapHTML(style: String, width: Int, height: Int) -> String {
-    return """
-    <!DOCTYPE html>
-    <html><head>
-    <meta charset="utf-8"/>
-    <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.0/dist/maplibre-gl.css"/>
-    <style>
-      * { margin:0; padding:0; box-sizing:border-box; }
-      html, body, #map { width:\(width)px; height:\(height)px; overflow:hidden; background:#000; }
-    </style>
-    </head>
-    <body><div id="map"></div>
-    <script src="https://unpkg.com/maplibre-gl@4.7.0/dist/maplibre-gl.js"></script>
-    <script>
-    // Forward console to Swift for debugging
-    ['log','warn','error'].forEach(function(m) {
-        var orig = console[m];
-        console[m] = function() {
-            var msg = Array.prototype.slice.call(arguments).join(' ');
-            orig.apply(console, arguments);
-            if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.mapConsole)
-                window.webkit.messageHandlers.mapConsole.postMessage('[' + m.toUpperCase() + '] ' + msg);
-        };
-    });
-
-    try {
-        window.__map = new maplibregl.Map({
-            container:            'map',
-            style:                '\(style)',
-            center:               [108.05, 12.66],
-            zoom:                 5,
-            antialias:            true,
-            fadeDuration:         0,
-            interactive:          false,
-            attributionControl:   false,
-            renderWorldCopies:    false,
-            preserveDrawingBuffer: true,   // required for WebGL pixel readback via snapshot
-        });
-
-        window.__map.on('load', function() {
-            console.log('MapLibre load fired');
-            if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.mapLoaded)
-                window.webkit.messageHandlers.mapLoaded.postMessage('loaded');
-        });
-
-        window.__map.on('error', function(e) {
-            console.error('Map error: ' + (e.error ? e.error.message : JSON.stringify(e)));
-        });
-    } catch(e) {
-        console.error('MapLibre init crash: ' + e.message);
-    }
-    </script>
-    </body></html>
-    """
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// MARK: - Main CLI
-// ─────────────────────────────────────────────────────────────────────────────
+// MARK: - Entry point
 
 @main
 struct MapCapture: AsyncParsableCommand {
-    @Option(name: .long) var output:     String = "/tmp/cinematic-output.mp4"
-    @Option(name: .long) var fps:        Int    = 30
-    @Option(name: .long) var resolution: String = "1080p"
-    @Option(name: .long) var styleUrl:   String = "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json"
-    @Option(name: .long) var mapToken:   String = ""
+    @Option var config: String = ""; @Option var output: String = "output.mp4"
+    @Option var width: Int = 1920; @Option var height: Int = 1080; @Option var fps: Int = 30
+    @Option var duration: Double = 10.0; @Option var style: String = "https://demotiles.maplibre.org/style.json"
 
-    mutating func run() async throws {
-        let (width, height) = resolution == "4K" ? (3840, 2160) : (1920, 1080)
-        fputs("[swift-encoder] Starting \(width)×\(height) @ \(fps)fps\n", stderr)
+    @MainActor
+    func run() async throws {
+        _ = Bundle.swizzleForCLI; _ = NSApplication.shared
+        
+        let fm = FileManager.default
+        let appSup = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        let dbPath = appSup.appendingPathComponent("com.cinematic.map.capture", isDirectory: true)
+        try? fm.createDirectory(atPath: dbPath.path, withIntermediateDirectories: true)
+        
+        UserDefaults.standard.set(dbPath.path, forKey: "MGLOfflineStorageDatabasePath")
+        UserDefaults.standard.set(false, forKey: "MGLMapboxMetricsEnabled")
 
-        // Read camera params from stdin
-        var cameras: [CameraParams] = []
-        if let raw = String(data: FileHandle.standardInput.readDataToEndOfFile(), encoding: .utf8) {
-            for line in raw.components(separatedBy: .newlines) where !line.isEmpty {
-                if let d = line.data(using: .utf8), let c = try? JSONDecoder().decode(CameraParams.self, from: d) {
-                    cameras.append(c)
-                }
-            }
+        var (sUrl, w, h, f, d, pts) = (style, width, height, fps, duration, [Keyframe]())
+        if let data = config.data(using: .utf8), let cfg = try? JSONDecoder().decode(RenderConfig.self, from: data) {
+            (sUrl, w, h, f, d, pts) = (cfg.style, cfg.width, cfg.height, cfg.fps, cfg.duration, cfg.points)
         }
-        let total = cameras.count
-        fputs("[swift-encoder] \(total) frames received\n", stderr)
-        guard total > 0 else {
-            fputs("[swift-encoder] No frames — exiting\n", stderr)
-            return
+        
+        fputs("[swift-render] 🌍 Starting native render \(w)x\(h) @ \(f)fps\n", stderr)
+        let enc = HEVCEncoder(width: w, height: h, fps: f); try enc.setup()
+        let ren = MapRenderer(width: w, height: h)
+        await ren.loadStyle(URL(string: sUrl)!)
+        
+        let total = Int(d * Double(f)); let t0 = Date()
+        fputs("[swift-render] 🎞️ Beginning frame-by-frame capture (\(total) frames)\n", stderr)
+        
+        for i in 0..<total {
+            let t = (Double(i) / Double(total)) * d
+            let k = interpolate(t, pts, d)
+            ren.updateCamera(lat: k.lat, lng: k.lng, zoom: k.zoom, pitch: k.pitch, bearing: k.bearing)
+            if let pb = ren.renderFrame() { 
+                enc.encodeFrame(pb, frameIndex: i) 
+            }
+            sendProgress(Progress(encoded: i + 1, total: total, fps: Double(i + 1)/Date().timeIntervalSince(t0), stage: "rendering"))
         }
+        
+        fputs("[swift-render] 💾 Flushing...\n", stderr)
+        enc.flush()
+        try? fm.removeItem(at: URL(fileURLWithPath: output))
+        try enc.writeToFile(URL(fileURLWithPath: output))
+        fputs("[swift-render] ✅ Video saved: \(output)\n", stderr)
+        Darwin.exit(0)
+    }
 
-        sendProgress(Progress(encoded: 0, total: total, fps: 0, stage: "capturing"))
-
-        let encoder  = HEVCEncoder(width: width, height: height, fps: fps)
-        try encoder.setup()
-        let postProc = MetalPostProcess()
-
-        // Init WKWebView (must run on MainActor)
-        let capturer = await MapWebCapture(width: width, height: height,
-                                           styleURL: styleUrl, mapToken: mapToken)
-
-        fputs("[swift-encoder] Waiting for MapLibre load…\n", stderr)
-
-        // Load timeout: 20s max
-        await withTaskGroup(of: Void.self) { g in
-            g.addTask { await capturer.waitForLoad() }
-            g.addTask {
-                try? await Task.sleep(nanoseconds: 20_000_000_000)
-                fputs("[swift-encoder] ⚠️ Load timeout — proceeding anyway\n", stderr)
-            }
-            await g.next(); g.cancelAll()
-        }
-
-        fputs("[swift-encoder] Capturing frames…\n", stderr)
-
-        let t0 = Date()
-        var encoded = 0
-
-        for (i, cam) in cameras.enumerated() {
-            guard let cg = await capturer.captureFrame(camera: cam) else {
-                fputs("[swift-encoder] ⚠️ nil snapshot frame \(i)\n", stderr)
-                continue
-            }
-            guard let pb = postProc.process(cgImage: cg) else {
-                fputs("[swift-encoder] ⚠️ post-process failed frame \(i)\n", stderr)
-                continue
-            }
-            encoder.encodeFrame(pb, frameIndex: i)
-            encoded += 1
-
-            if encoded % 10 == 0 {
-                let elapsed = Date().timeIntervalSince(t0)
-                sendProgress(Progress(encoded: encoded, total: total,
-                                      fps: elapsed > 0 ? Double(encoded)/elapsed : 0,
-                                      stage: "encoding"))
-            }
-        }
-
-        sendProgress(Progress(encoded: encoded, total: total, fps: 0, stage: "postprocess"))
-        encoder.flush()
-
-        let url = URL(fileURLWithPath: output)
-        try? FileManager.default.removeItem(at: url)
-        try encoder.writeToFile(url)
-        encoder.teardown()
-
-        let elapsed = Date().timeIntervalSince(t0)
-        fputs("[swift-encoder] ✅ Done. \(encoded)/\(total) frames in \(String(format:"%.1f",elapsed))s\n", stderr)
-        sendProgress(Progress(encoded: encoded, total: total,
-                              fps: elapsed > 0 ? Double(encoded)/elapsed : 0, stage: "done"))
+    private func interpolate(_ t: Double, _ pts: [Keyframe], _ d: Double) -> Keyframe {
+        if pts.isEmpty { return Keyframe(id: "", label: "", time: t, lat: 0, lng: 0, zoom: 0, pitch: 0, bearing: 0) }
+        if pts.count == 1 { return pts[0] }
+        var p0 = pts[0], p1 = pts.last!
+        for j in 0..<pts.count-1 { if t >= pts[j].time && t <= pts[j+1].time { p0 = pts[j]; p1 = pts[j+1]; break } }
+        let segDur = max(0.001, p1.time - p0.time)
+        let prog = Interpolator.easeInOutCubic((t - p0.time) / segDur)
+        return Keyframe(
+            id: p0.id, label: p0.label, time: t,
+            lat: Interpolator.lerp(p0.lat, p1.lat, prog),
+            lng: Interpolator.lerp(p0.lng, p1.lng, prog),
+            zoom: Interpolator.arcZoom(start: p0.zoom, end: p1.zoom, progress: prog),
+            pitch: Interpolator.lerp(p0.pitch, p1.pitch, prog),
+            bearing: Interpolator.lerpAngle(p0.bearing, p1.bearing, prog)
+        )
     }
 }

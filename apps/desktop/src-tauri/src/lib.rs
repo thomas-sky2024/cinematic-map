@@ -1,6 +1,6 @@
 use map_engine::{compute_frames, interpolate_single, Keyframe, FrameCamera};
 use serde::{Deserialize, Serialize};
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader};
 use std::process::{Command, Stdio};
 use std::thread;
 use tauri::{AppHandle, Emitter, Manager};
@@ -87,80 +87,69 @@ async fn cmd_start_render(
     fps: u32,
     resolution: String,
     output_path: String,
-    style_url: String,   // passed to Swift so WKWebView loads the right style
-    map_token: String,
+    style_url: String,   
+    _map_token: String,
 ) -> Result<(), String> {
-    emit_status(&app, "computing", 0, 0, 0.0, None, None);
-    let frames = compute_frames(&keyframes, fps);
-    let total  = frames.len() as u32;
-
-    if total == 0 {
-        return Err("No frames to render — need at least 2 keyframes".into());
-    }
+    emit_status(&app, "initializing", 0, 0, 0.0, None, None);
+    
+    let (width, height) = match resolution.as_str() {
+        "4K" => (3840, 2160),
+        _ => (1920, 1080),
+    };
 
     let encoder_path = resolve_encoder_path(&app);
 
+    // Prepare JSON config for Swift
+    let duration = keyframes.last().map(|k| k.time).unwrap_or(0.0);
+    let config = serde_json::json!({
+        "style": style_url,
+        "points": keyframes,
+        "duration": duration,
+        "fps": fps,
+        "width": width,
+        "height": height,
+    });
+    let config_json = serde_json::to_string(&config).map_err(|e| e.to_string())?;
+
+    // Spawn Swift encoder which now handles RENDER + ENCODE
     let mut child = Command::new(&encoder_path)
         .args([
+            "--config",     &config_json,
             "--output",     &output_path,
+            "--width",      &width.to_string(),
+            "--height",     &height.to_string(),
             "--fps",        &fps.to_string(),
-            "--resolution", &resolution,
-            "--style-url",  &style_url,
-            "--map-token",  &map_token,
         ])
-        .stdin(Stdio::piped())
+        .stdin(Stdio::null())
         .stderr(Stdio::piped())
         .stdout(Stdio::null())
         .spawn()
-        .map_err(|e| format!("Failed to spawn swift encoder at '{}': {}", encoder_path, e))?;
+        .map_err(|e| format!("Failed to spawn native renderer at '{}': {}", encoder_path, e))?;
 
-    let stdin  = child.stdin.take().ok_or("Could not get stdin")?;
     let stderr = child.stderr.take().ok_or("Could not get stderr")?;
 
     // Thread: relay Swift stderr progress → Tauri events
     let app_p = app.clone();
-    let total_p = total;
     thread::spawn(move || {
         let reader = BufReader::new(stderr);
         for line in reader.lines().flatten() {
+            // Swift might output non-JSON logs too, try to parse
             if let Ok(p) = serde_json::from_str::<SwiftProgress>(&line) {
-                let real_total = if p.total > 0 { p.total as u32 } else { total_p };
-                emit_status(&app_p, &p.stage, p.encoded, real_total, p.fps, None, None);
+                emit_status(&app_p, &p.stage, p.encoded, p.total as u32, p.fps, None, None);
             } else {
-                // Log raw Swift output to stderr for debugging
                 eprintln!("[swift] {}", line);
             }
         }
     });
 
-    // Thread: write frame JSON to stdin
-    let app_w = app.clone();
-    let write_handle = thread::spawn(move || -> Result<(), String> {
-        let mut stdin = stdin;
-        for (i, frame) in frames.iter().enumerate() {
-            let json = serde_json::to_string(frame)
-                .map_err(|e| format!("Serialization error: {e}"))?;
-            writeln!(stdin, "{json}")
-                .map_err(|e| format!("Write to encoder failed: {e}"))?;
-            if i % 5 == 0 {
-                emit_status(&app_w, "capturing", i as u32, total, 0.0, None, None);
-            }
-        }
-        Ok(())
-    });
-
-    write_handle
-        .join()
-        .map_err(|_| "Frame-write thread panicked".to_string())??;
-
-    let exit_status = child.wait().map_err(|e| format!("Encoder wait error: {e}"))?;
+    let exit_status = child.wait().map_err(|e| format!("Renderer wait error: {e}"))?;
 
     if exit_status.success() {
-        emit_status(&app, "done", total, total, 0.0, None, Some(output_path));
+        emit_status(&app, "done", 0, 0, 0.0, None, Some(output_path));
         Ok(())
     } else {
-        let msg = format!("Swift encoder exited with non-zero status: {exit_status}");
-        emit_status(&app, "error", 0, total, 0.0, Some(msg.clone()), None);
+        let msg = format!("Native renderer failed: {exit_status}");
+        emit_status(&app, "error", 0, 0, 0.0, Some(msg.clone()), None);
         Err(msg)
     }
 }

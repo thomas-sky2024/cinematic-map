@@ -4,3 +4,6 @@ dist/
 .env
 .DS_Store
 *.log
+.build/
+*.mp4
+MapLibre.framework/

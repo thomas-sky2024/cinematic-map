@@ -38,6 +38,61 @@ pub struct FrameCamera {
     pub bearing: f64,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+pub mod render {
+    use super::*;
+    use std::io::Write;
+    use std::num::NonZeroU32;
+    use url::Url;
+    use maplibre_native::ImageRendererBuilder;
+
+    pub async fn render_to_stream<W: Write>(
+        mut writer: W,
+        keyframes: Vec<Keyframe>,
+        fps: u32,
+        width: u32,
+        height: u32,
+        style_url: String,
+        on_progress: impl Fn(u32, u32),
+    ) -> Result<(), String> {
+        let frames = compute_frames(&keyframes, fps);
+        let total = frames.len() as u32;
+        if total == 0 { return Ok(()); }
+
+        // 1. Initialize MapLibre Native Headless Renderer
+        let mut renderer = ImageRendererBuilder::new()
+            .with_size(
+                NonZeroU32::new(width).ok_or("Width must be non-zero")?,
+                NonZeroU32::new(height).ok_or("Height must be non-zero")?,
+            )
+            .build_static_renderer();
+
+        let url = Url::parse(&style_url).map_err(|e| format!("Invalid Style URL: {e}"))?;
+        renderer.load_style_from_url(&url);
+
+        // 2. Main Loop
+        for (i, frame) in frames.iter().enumerate() {
+            // Render the frame
+            let image = renderer.render_static(
+                frame.lat,
+                frame.lng,
+                frame.zoom,
+                frame.bearing,
+                frame.pitch
+            ).map_err(|e| format!("Render failed at frame {i}: {e}"))?;
+
+            // 3. Output raw bytes to the stream
+            // image.as_image() returns &ImageBuffer<Rgba<u8>, Vec<u8>>
+            let raw_data = image.as_image().as_raw();
+            writer.write_all(raw_data).map_err(|e| format!("Pipe write error: {e}"))?;
+            
+            on_progress(i as u32 + 1, total);
+        }
+
+        Ok(())
+    }
+}
+
 // ── Public API ─────────────────────────────────────────────────────────────
 
 pub fn compute_frames(kfs: &[Keyframe], fps: u32) -> Vec<FrameCamera> {

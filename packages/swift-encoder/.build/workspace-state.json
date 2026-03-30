@@ -1,9 +1,45 @@
 {
   "object" : {
     "artifacts" : [
+      {
+        "kind" : {
+          "xcframework" : {
 
+          }
+        },
+        "packageRef" : {
+          "identity" : "maplibre-macos-distribution",
+          "kind" : "remoteSourceControl",
+          "location" : "https://github.com/fonok3/maplibre-macos-distribution.git",
+          "name" : "MapLibre"
+        },
+        "path" : "/Users/tt/Documents/vibe-coding/animate-map/cinematic-map/packages/swift-encoder/.build/artifacts/maplibre-macos-distribution/MapLibre/MapLibre.xcframework",
+        "source" : {
+          "checksum" : "03e7dc4117e22efcde59d63df83ce0c760a0fb45376e71ee9692bfc0689ad5ca",
+          "type" : "remote",
+          "url" : "https://github.com/fonok3/maplibre-macos-distribution/releases/download/6.23.0/MapLibre.xcframework.zip"
+        },
+        "targetName" : "MapLibre"
+      }
     ],
     "dependencies" : [
+      {
+        "basedOn" : null,
+        "packageRef" : {
+          "identity" : "maplibre-macos-distribution",
+          "kind" : "remoteSourceControl",
+          "location" : "https://github.com/fonok3/maplibre-macos-distribution.git",
+          "name" : "MapLibre"
+        },
+        "state" : {
+          "checkoutState" : {
+            "revision" : "517f1e319e05cf55d92ada78a2b76b7866783fec",
+            "version" : "6.23.0"
+          },
+          "name" : "sourceControlCheckout"
+        },
+        "subpath" : "maplibre-macos-distribution"
+      },
       {
         "basedOn" : null,
         "packageRef" : {

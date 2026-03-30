@@ -3,7 +3,20 @@
 
   ],
   "copyCommands" : {
-
+    "/Users/tt/Documents/vibe-coding/animate-map/cinematic-map/packages/swift-encoder/.build/arm64-apple-macosx/release/MapLibre.framework" : {
+      "inputs" : [
+        {
+          "kind" : "directory",
+          "name" : "/Users/tt/Documents/vibe-coding/animate-map/cinematic-map/packages/swift-encoder/.build/artifacts/maplibre-macos-distribution/MapLibre/MapLibre.xcframework/macos-arm64_x86_64/MapLibre.framework"
+        }
+      ],
+      "outputs" : [
+        {
+          "kind" : "directory",
+          "name" : "/Users/tt/Documents/vibe-coding/animate-map/cinematic-map/packages/swift-encoder/.build/arm64-apple-macosx/release/MapLibre.framework"
+        }
+      ]
+    }
   },
   "explicitTargetDependencyImportCheckingMode" : {
     "none" : {
@@ -11,8 +24,8 @@
     }
   },
   "generatedSourceTargetSet" : [
-    "GenerateManual",
-    "GenerateDoccReference"
+    "GenerateDoccReference",
+    "GenerateManual"
   ],
   "pluginDescriptions" : [
     {
@@ -351,6 +364,7 @@
         "-emit-objc-header",
         "-emit-objc-header-path",
         "/Users/tt/Documents/vibe-coding/animate-map/cinematic-map/packages/swift-encoder/.build/arm64-apple-macosx/release/ArgumentParser-tool.build/include/ArgumentParser-Swift.h",
+        "-color-diagnostics",
         "-swift-version",
         "5",
         "-enable-experimental-feature",
@@ -952,6 +966,7 @@
         "-emit-objc-header",
         "-emit-objc-header-path",
         "/Users/tt/Documents/vibe-coding/animate-map/cinematic-map/packages/swift-encoder/.build/arm64-apple-macosx/release/ArgumentParser.build/include/ArgumentParser-Swift.h",
+        "-color-diagnostics",
         "-swift-version",
         "5",
         "-enable-experimental-feature",
@@ -1299,6 +1314,7 @@
         "-emit-objc-header",
         "-emit-objc-header-path",
         "/Users/tt/Documents/vibe-coding/animate-map/cinematic-map/packages/swift-encoder/.build/arm64-apple-macosx/release/ArgumentParserToolInfo-tool.build/include/ArgumentParserToolInfo-Swift.h",
+        "-color-diagnostics",
         "-swift-version",
         "5",
         "-enable-upcoming-feature",
@@ -1394,6 +1410,7 @@
         "-emit-objc-header",
         "-emit-objc-header-path",
         "/Users/tt/Documents/vibe-coding/animate-map/cinematic-map/packages/swift-encoder/.build/arm64-apple-macosx/release/ArgumentParserToolInfo.build/include/ArgumentParserToolInfo-Swift.h",
+        "-color-diagnostics",
         "-swift-version",
         "5",
         "-enable-upcoming-feature",
@@ -1507,6 +1524,7 @@
         "-entry-point-function-name",
         "-Xfrontend",
         "generate_docc_reference_main",
+        "-color-diagnostics",
         "-swift-version",
         "5",
         "-enable-upcoming-feature",
@@ -1630,6 +1648,7 @@
         "-entry-point-function-name",
         "-Xfrontend",
         "generate_docc_reference_main",
+        "-color-diagnostics",
         "-swift-version",
         "5",
         "-enable-upcoming-feature",
@@ -1888,6 +1907,7 @@
         "-entry-point-function-name",
         "-Xfrontend",
         "generate_manual_main",
+        "-color-diagnostics",
         "-swift-version",
         "5",
         "-enable-upcoming-feature",
@@ -2281,6 +2301,7 @@
         "-entry-point-function-name",
         "-Xfrontend",
         "generate_manual_main",
+        "-color-diagnostics",
         "-swift-version",
         "5",
         "-enable-upcoming-feature",
@@ -2497,6 +2518,10 @@
           "name" : "/Users/tt/Documents/vibe-coding/animate-map/cinematic-map/packages/swift-encoder/.build/arm64-apple-macosx/release/Modules/ArgumentParser.swiftmodule"
         },
         {
+          "kind" : "directory",
+          "name" : "/Users/tt/Documents/vibe-coding/animate-map/cinematic-map/packages/swift-encoder/.build/arm64-apple-macosx/release/MapLibre.framework"
+        },
+        {
           "kind" : "file",
           "name" : "/Users/tt/Documents/vibe-coding/animate-map/cinematic-map/packages/swift-encoder/.build/arm64-apple-macosx/release/map_capture.build/sources"
         }
@@ -2518,6 +2543,12 @@
         "-j10",
         "-DSWIFT_PACKAGE",
         "-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE",
+        "-I",
+        "/Users/tt/Documents/vibe-coding/animate-map/cinematic-map/packages/swift-encoder/.build/artifacts/maplibre-macos-distribution/MapLibre/MapLibre.xcframework/macos-arm64_x86_64",
+        "-Xcc",
+        "-I",
+        "-Xcc",
+        "/Users/tt/Documents/vibe-coding/animate-map/cinematic-map/packages/swift-encoder/.build/artifacts/maplibre-macos-distribution/MapLibre/MapLibre.xcframework/macos-arm64_x86_64",
         "-module-cache-path",
         "/Users/tt/Documents/vibe-coding/animate-map/cinematic-map/packages/swift-encoder/.build/arm64-apple-macosx/release/ModuleCache",
         "-parseable-output",
@@ -2526,6 +2557,9 @@
         "-Xfrontend",
         "map_capture_main",
         "-parse-as-library",
+        "-F",
+        "/Users/tt/Documents/vibe-coding/animate-map/cinematic-map/packages/swift-encoder/.build/arm64-apple-macosx/release",
+        "-color-diagnostics",
         "-swift-version",
         "5",
         "-plugin-path",
@@ -2658,6 +2692,7 @@
       "-emit-objc-header",
       "-emit-objc-header-path",
       "/Users/tt/Documents/vibe-coding/animate-map/cinematic-map/packages/swift-encoder/.build/arm64-apple-macosx/release/ArgumentParser.build/include/ArgumentParser-Swift.h",
+      "-color-diagnostics",
       "-swift-version",
       "5",
       "-enable-experimental-feature",
@@ -2722,6 +2757,7 @@
       "-emit-objc-header",
       "-emit-objc-header-path",
       "/Users/tt/Documents/vibe-coding/animate-map/cinematic-map/packages/swift-encoder/.build/arm64-apple-macosx/release/ArgumentParserToolInfo-tool.build/include/ArgumentParserToolInfo-Swift.h",
+      "-color-diagnostics",
       "-swift-version",
       "5",
       "-enable-upcoming-feature",
@@ -2786,6 +2822,7 @@
       "-entry-point-function-name",
       "-Xfrontend",
       "generate_docc_reference_main",
+      "-color-diagnostics",
       "-swift-version",
       "5",
       "-enable-upcoming-feature",
@@ -2877,6 +2914,7 @@
       "-entry-point-function-name",
       "-Xfrontend",
       "generate_manual_main",
+      "-color-diagnostics",
       "-swift-version",
       "5",
       "-enable-upcoming-feature",
@@ -2934,6 +2972,12 @@
       "-j10",
       "-DSWIFT_PACKAGE",
       "-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE",
+      "-I",
+      "/Users/tt/Documents/vibe-coding/animate-map/cinematic-map/packages/swift-encoder/.build/artifacts/maplibre-macos-distribution/MapLibre/MapLibre.xcframework/macos-arm64_x86_64",
+      "-Xcc",
+      "-I",
+      "-Xcc",
+      "/Users/tt/Documents/vibe-coding/animate-map/cinematic-map/packages/swift-encoder/.build/artifacts/maplibre-macos-distribution/MapLibre/MapLibre.xcframework/macos-arm64_x86_64",
       "-module-cache-path",
       "/Users/tt/Documents/vibe-coding/animate-map/cinematic-map/packages/swift-encoder/.build/arm64-apple-macosx/release/ModuleCache",
       "-parseable-output",
@@ -2942,6 +2986,9 @@
       "-Xfrontend",
       "map_capture_main",
       "-parse-as-library",
+      "-F",
+      "/Users/tt/Documents/vibe-coding/animate-map/cinematic-map/packages/swift-encoder/.build/arm64-apple-macosx/release",
+      "-color-diagnostics",
       "-swift-version",
       "5",
       "-plugin-path",
@@ -2995,6 +3042,7 @@
       "ArgumentParserToolInfo"
     ],
     "map_capture" : [
+      "MapLibre",
       "ArgumentParser",
       "ArgumentParserToolInfo"
     ]
