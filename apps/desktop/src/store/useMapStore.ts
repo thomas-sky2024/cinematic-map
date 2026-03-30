@@ -33,6 +33,8 @@ interface MapState {
   // Render
   renderStatus: RenderStatus | null;
   renderResolution: "1080p" | "4K";
+  renderCodec: "h265" | "prores";
+  renderBitrate: number;
   showRenderPanel: boolean;
 
   // Actions — Map
@@ -47,6 +49,7 @@ interface MapState {
   deleteKeyframe: (id: string) => void;
   reorderKeyframes: (fromIdx: number, toIdx: number) => void;
   selectKeyframe: (id: string | null) => void;
+  syncSelectedKeyframeWithMap: () => void;
   setTotalDuration: (seconds: number) => void;
   importConfig: (jsonStr: string) => void;
 
@@ -69,6 +72,8 @@ interface MapState {
   // Actions — Render
   setRenderStatus: (status: RenderStatus | null) => void;
   setRenderResolution: (r: "1080p" | "4K") => void;
+  setRenderCodec: (c: "h265" | "prores") => void;
+  setRenderBitrate: (b: number) => void;
   setShowRenderPanel: (v: boolean) => void;
 }
 
@@ -96,6 +101,8 @@ export const useMapStore = create<MapState>()(
       annotationMode: null,
       renderStatus: null,
       renderResolution: "1080p",
+      renderCodec: "h265",
+      renderBitrate: 50,
       showRenderPanel: false,
 
       // Map actions
@@ -165,6 +172,20 @@ export const useMapStore = create<MapState>()(
         }),
 
       selectKeyframe: (id) => set({ selectedKeyframeId: id, selectedAnnotationId: null }),
+      
+      syncSelectedKeyframeWithMap: () => {
+        const { selectedKeyframeId, mapRef, updateKeyframe } = get();
+        if (!selectedKeyframeId || !mapRef) return;
+        const center = mapRef.getCenter();
+        updateKeyframe(selectedKeyframeId, {
+          lat: center.lat,
+          lng: center.lng,
+          zoom: mapRef.getZoom(),
+          pitch: mapRef.getPitch(),
+          bearing: mapRef.getBearing(),
+        });
+      },
+
       setTotalDuration: (seconds) => set((s) => {
         if (s.keyframes.length < 2) return { totalDuration: seconds };
         const oldTotal = s.keyframes[s.keyframes.length - 1].time;
@@ -235,6 +256,8 @@ export const useMapStore = create<MapState>()(
       // Render
       setRenderStatus: (status) => set({ renderStatus: status }),
       setRenderResolution: (r) => set({ renderResolution: r }),
+      setRenderCodec: (c) => set({ renderCodec: c }),
+      setRenderBitrate: (b) => set({ renderBitrate: b }),
       setShowRenderPanel: (v) => set({ showRenderPanel: v }),
     }),
     {
@@ -248,6 +271,8 @@ export const useMapStore = create<MapState>()(
         totalDuration: s.totalDuration,
         fps: s.fps,
         renderResolution: s.renderResolution,
+        renderCodec: s.renderCodec,
+        renderBitrate: s.renderBitrate,
       }),
     }
   )

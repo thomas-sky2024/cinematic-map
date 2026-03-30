@@ -62,7 +62,7 @@ export async function startRender(
   resolution: "1080p" | "4K",
   outputPath: string
 ): Promise<void> {
-  const { setRenderStatus, mapStyleId, mapToken } = useMapStore.getState();
+  const { setRenderStatus, mapStyleId, mapToken, renderCodec, renderBitrate } = useMapStore.getState();
   const styleUrl = getStyleUrl(mapStyleId, mapToken);
 
   setRenderStatus({ stage: "computing", encoded: 0, total: 0, fps: 0 });
@@ -76,6 +76,8 @@ export async function startRender(
       keyframes,
       fps,
       resolution,
+      codec: renderCodec,
+      bitrate: renderBitrate,
       outputPath,
       styleUrl,           // pass active style to Swift WKWebView
       mapToken,           // pass token for MapTiler styles

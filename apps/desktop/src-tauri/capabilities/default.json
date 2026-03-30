@@ -6,6 +6,11 @@
   "permissions": [
     "core:default",
     "core:app:default",
-    "dialog:default"
+    "dialog:allow-open",
+    "dialog:allow-save",
+    "fs:allow-read-text-file",
+    "fs:allow-write-text-file",
+    "fs:allow-exists",
+    "shell:allow-execute"
   ]
 }

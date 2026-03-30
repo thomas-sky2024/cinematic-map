@@ -166,7 +166,9 @@ function EncoderSetupGuide() {
 export function RenderPanel() {
   const {
     keyframes, fps, renderResolution, renderStatus, totalDuration,
+    renderCodec, renderBitrate,
     setShowRenderPanel, setRenderStatus, setRenderResolution, setFps,
+    setRenderCodec, setRenderBitrate,
   } = useMapStore();
 
   const [outputPath, setOutputPath] = useState("");
@@ -179,9 +181,10 @@ export function RenderPanel() {
 
   const handleSelectPath = async () => {
     try {
+      const ext = renderCodec === "prores" ? "mov" : "mp4";
       const selected = await save({
-        filters: [{ name: "Video", extensions: ["mp4"] }],
-        defaultPath: "cinematic-output.mp4"
+        filters: [{ name: "Video", extensions: [ext] }],
+        defaultPath: `cinematic-output.${ext}`
       });
       if (selected) {
         setOutputPath(selected as string);
@@ -198,7 +201,6 @@ export function RenderPanel() {
     if (!canRender) return;
 
     if (!isTauri()) {
-      // Show a polite browser-mode message instead of erroring
       setRenderStatus({
         stage: "error",
         encoded: 0,
@@ -287,6 +289,45 @@ export function RenderPanel() {
               </div>
             </div>
 
+            {/* Codec */}
+            <div className="flex items-center justify-between">
+              <span className="text-sm text-white/60">Format</span>
+              <div className="flex gap-1.5">
+                {(["h265", "prores"] as const).map((c) => (
+                  <button
+                    key={c}
+                    onClick={() => setRenderCodec(c)}
+                    className={`px-3 py-1 rounded-lg border text-xs font-medium transition-colors ${
+                      renderCodec === c
+                        ? "border-blue-500/60 bg-blue-500/15 text-blue-300"
+                        : "border-white/12 text-white/40 hover:text-white/60"
+                    }`}
+                  >
+                    {c === "h265" ? "HEVC" : "ProRes 422"}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Bitrate (H265 only) */}
+            {renderCodec === "h265" && (
+              <div className="flex items-center justify-between">
+                <span className="text-sm text-white/60">Bitrate</span>
+                <div className="flex items-center gap-3">
+                  <input
+                    type="range"
+                    min={10} max={100} step={5}
+                    value={renderBitrate}
+                    onChange={(e) => setRenderBitrate(Number(e.target.value))}
+                    className="w-32 h-1.5 bg-white/10 rounded-full appearance-none cursor-pointer accent-blue-500"
+                  />
+                  <span className="text-[11px] text-white/40 w-12 font-mono tabular-nums">
+                    {renderBitrate}M
+                  </span>
+                </div>
+              </div>
+            )}
+
             {/* Total frames */}
             <div className="flex items-center justify-between text-xs text-white/40">
               <span>Total frames</span>
@@ -313,7 +354,10 @@ export function RenderPanel() {
                 </button>
               </div>
               <p className="text-[10px] text-white/20 mt-1">
-                HEVC .mp4 · M1 VideoToolbox hardware encode · Metal post-process
+                {renderCodec === "prores" 
+                  ? "QuickTime .mov · Apple ProRes 422 · Best for editing" 
+                  : `HEVC .mp4 · ${renderBitrate} Mbps · Best for sharing`
+                }
               </p>
             </div>
           </div>

@@ -147,7 +147,10 @@ export function TopBar() {
       try {
         await tauriWriteFile(path, json);
         flash(setExportState, "ok");
-      } catch { flash(setExportState, "err"); }
+      } catch (err) {
+        console.error("Export failed:", err);
+        flash(setExportState, "err");
+      }
     } else {
       const a = Object.assign(document.createElement("a"), {
         href: URL.createObjectURL(new Blob([json], { type: "application/json" })),
@@ -165,9 +168,13 @@ export function TopBar() {
       const path = await tauriOpenDialog();
       if (!path) return;
       try {
-        importConfig(await tauriReadFile(path));
+        const content = await tauriReadFile(path);
+        importConfig(content);
         flash(setImportState, "ok");
-      } catch { flash(setImportState, "err"); }
+      } catch (err) {
+        console.error("Import failed:", err);
+        flash(setImportState, "err");
+      }
     } else {
       fallbackImportRef.current?.click();
     }

@@ -86,6 +86,8 @@ async fn cmd_start_render(
     keyframes: Vec<Keyframe>,
     fps: u32,
     resolution: String,
+    codec: String,
+    bitrate: u32,
     output_path: String,
     style_url: String,   
     _map_token: String,
@@ -108,6 +110,8 @@ async fn cmd_start_render(
         "fps": fps,
         "width": width,
         "height": height,
+        "codec": codec,
+        "bitrate": bitrate,
     });
     let config_json = serde_json::to_string(&config).map_err(|e| e.to_string())?;
 
@@ -119,6 +123,8 @@ async fn cmd_start_render(
             "--width",      &width.to_string(),
             "--height",     &height.to_string(),
             "--fps",        &fps.to_string(),
+            "--codec",      &codec,
+            "--bitrate",    &bitrate.to_string(),
         ])
         .stdin(Stdio::null())
         .stderr(Stdio::piped())
