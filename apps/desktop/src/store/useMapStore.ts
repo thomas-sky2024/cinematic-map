@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
-import { Keyframe, FrameCamera, EasingType, MAP_STYLES } from "../types";
+import { Keyframe, FrameCamera, EasingType, MAP_STYLES, Annotation, AnnotationType, RenderStatus } from "../types";
 
 import maplibregl from "maplibre-gl";
 
@@ -14,7 +14,7 @@ interface MapState {
   // Keyframes
   keyframes: Keyframe[];
   selectedKeyframeId: string | null;
-  totalDuration: number; // seconds
+  totalDuration: number;
 
   // Playback
   currentTime: number;
@@ -24,6 +24,16 @@ interface MapState {
   // Computed frames cache (from Rust)
   computedFrames: FrameCamera[];
   isComputing: boolean;
+
+  // Annotations
+  annotations: Annotation[];
+  selectedAnnotationId: string | null;
+  annotationMode: AnnotationType | null; // active placement mode
+
+  // Render
+  renderStatus: RenderStatus | null;
+  renderResolution: "1080p" | "4K";
+  showRenderPanel: boolean;
 
   // Actions — Map
   setMapRef: (map: maplibregl.Map | null) => void;
@@ -48,11 +58,22 @@ interface MapState {
   // Actions — Rust integration
   setComputedFrames: (frames: FrameCamera[]) => void;
   setIsComputing: (v: boolean) => void;
+
+  // Actions — Annotations
+  addAnnotation: (ann: Annotation) => void;
+  updateAnnotation: (id: string, patch: Partial<Annotation>) => void;
+  deleteAnnotation: (id: string) => void;
+  selectAnnotation: (id: string | null) => void;
+  setAnnotationMode: (mode: AnnotationType | null) => void;
+
+  // Actions — Render
+  setRenderStatus: (status: RenderStatus | null) => void;
+  setRenderResolution: (r: "1080p" | "4K") => void;
+  setShowRenderPanel: (v: boolean) => void;
 }
 
-// Simple ID generator
 let _id = 0;
-const uid = () => `kf_${Date.now()}_${++_id}`;
+const uid = () => `id_${Date.now()}_${++_id}`;
 
 export const useMapStore = create<MapState>()(
   persist(
@@ -70,6 +91,12 @@ export const useMapStore = create<MapState>()(
       fps: 30,
       computedFrames: [],
       isComputing: false,
+      annotations: [],
+      selectedAnnotationId: null,
+      annotationMode: null,
+      renderStatus: null,
+      renderResolution: "1080p",
+      showRenderPanel: false,
 
       // Map actions
       setMapRef: (map) => set({ mapRef: map }),
@@ -85,19 +112,17 @@ export const useMapStore = create<MapState>()(
         const center = mapRef.getCenter();
         const kfCount = keyframes.length;
 
-        // Capture thumbnail from map canvas
         let thumbnail: string | undefined;
         try {
           const canvas = mapRef.getCanvas();
           thumbnail = canvas.toDataURL("image/jpeg", 0.4);
         } catch { /* ignore */ }
 
-        // Auto-assign time: spread evenly or append
         const time = kfCount === 0
           ? 0
           : kfCount === 1
             ? totalDuration
-            : keyframes[kfCount - 1].time + (totalDuration / (kfCount));
+            : keyframes[kfCount - 1].time + (totalDuration / kfCount);
 
         const newKf: Keyframe = {
           id: uid(),
@@ -128,8 +153,7 @@ export const useMapStore = create<MapState>()(
       deleteKeyframe: (id) =>
         set((s) => ({
           keyframes: s.keyframes.filter((kf) => kf.id !== id),
-          selectedKeyframeId:
-            s.selectedKeyframeId === id ? null : s.selectedKeyframeId,
+          selectedKeyframeId: s.selectedKeyframeId === id ? null : s.selectedKeyframeId,
         })),
 
       reorderKeyframes: (fromIdx, toIdx) =>
@@ -140,8 +164,19 @@ export const useMapStore = create<MapState>()(
           return { keyframes: sorted };
         }),
 
-      selectKeyframe: (id) => set({ selectedKeyframeId: id }),
-      setTotalDuration: (seconds) => set({ totalDuration: seconds }),
+      selectKeyframe: (id) => set({ selectedKeyframeId: id, selectedAnnotationId: null }),
+      setTotalDuration: (seconds) => set((s) => {
+        if (s.keyframes.length < 2) return { totalDuration: seconds };
+        const oldTotal = s.keyframes[s.keyframes.length - 1].time;
+        if (oldTotal <= 0) return { totalDuration: seconds };
+        const scale = seconds / oldTotal;
+        const newKeyframes = s.keyframes.map((kf, i) => {
+            if (i === 0) return { ...kf, time: 0 };
+            if (i === s.keyframes.length - 1) return { ...kf, time: seconds };
+            return { ...kf, time: parseFloat((kf.time * scale).toFixed(2)) };
+        });
+        return { totalDuration: seconds, keyframes: newKeyframes };
+      }),
 
       importConfig: (jsonStr) => {
         try {
@@ -153,6 +188,7 @@ export const useMapStore = create<MapState>()(
               id: kf.id ?? uid(),
               easing: kf.easing ?? "EaseInOut",
             })),
+            annotations: config.annotations ?? [],
             totalDuration: config.totalDuration ?? 10,
             fps: config.fps ?? 30,
             selectedKeyframeId: null,
@@ -171,19 +207,48 @@ export const useMapStore = create<MapState>()(
       // Rust integration
       setComputedFrames: (frames) => set({ computedFrames: frames }),
       setIsComputing: (v) => set({ isComputing: v }),
+
+      // Annotations
+      addAnnotation: (ann) =>
+        set((s) => ({
+          annotations: [...s.annotations, ann],
+          selectedAnnotationId: ann.id,
+          annotationMode: null,
+        })),
+
+      updateAnnotation: (id, patch) =>
+        set((s) => ({
+          annotations: s.annotations.map((a) =>
+            a.id === id ? { ...a, ...patch } : a
+          ),
+        })),
+
+      deleteAnnotation: (id) =>
+        set((s) => ({
+          annotations: s.annotations.filter((a) => a.id !== id),
+          selectedAnnotationId: s.selectedAnnotationId === id ? null : s.selectedAnnotationId,
+        })),
+
+      selectAnnotation: (id) => set({ selectedAnnotationId: id, selectedKeyframeId: null }),
+      setAnnotationMode: (mode) => set({ annotationMode: mode }),
+
+      // Render
+      setRenderStatus: (status) => set({ renderStatus: status }),
+      setRenderResolution: (r) => set({ renderResolution: r }),
+      setShowRenderPanel: (v) => set({ showRenderPanel: v }),
     }),
     {
       name: "cinematic-map-state",
-      // Don't persist mapRef or computed frames
       partialize: (s) => ({
         mapToken: s.mapToken,
         mapStyleId: s.mapStyleId,
         terrainEnabled: s.terrainEnabled,
         keyframes: s.keyframes,
+        annotations: s.annotations,
         totalDuration: s.totalDuration,
         fps: s.fps,
+        renderResolution: s.renderResolution,
       }),
     }
   )
 );
-
