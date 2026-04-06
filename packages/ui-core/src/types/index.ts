@@ -77,8 +77,9 @@ export interface Annotation {
 export type RenderStage =
   | "idle"
   | "computing"
-  | "bundling"
+  | "capturing"
   | "encoding"
+  | "postprocess"
   | "done"
   | "error";
 

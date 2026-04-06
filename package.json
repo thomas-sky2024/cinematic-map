@@ -4,9 +4,11 @@
   "scripts": {
     "dev": "pnpm --filter desktop tauri dev",
     "build": "pnpm --filter desktop tauri build",
-    "build:swift": "cd packages/swift-encoder && swift build -c release"
+    "typecheck": "pnpm -r exec tsc --noEmit",
+    "lint": "pnpm -r exec eslint ."
   },
   "devDependencies": {
-    "typescript": "~5.8.3"
+    "typescript": "~5.8.3",
+    "@types/node": "^22.13.10"
   }
 }

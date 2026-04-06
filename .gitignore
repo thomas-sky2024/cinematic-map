@@ -7,3 +7,5 @@ dist/
 .build/
 *.mp4
 MapLibre.framework/
+
+packages/renderer-remotion/build

@@ -58,16 +58,44 @@ function ApiKeyNudge() {
 // ── Root App ──────────────────────────────────────────────────────────────
 
 export default function App() {
-  const { mapToken, showRenderPanel } = useMapStore();
+  const { mapToken, showRenderPanel, isPlaying, currentTime, totalDuration, setCurrentTime, setIsPlaying } = useMapStore();
 
   useEffect(() => {
     document.body.style.background = "#030712";
     document.body.style.overflow = "hidden";
   }, []);
 
+  // Playback Loop
+  useEffect(() => {
+    if (!isPlaying) return;
+
+    let lastTime = performance.now();
+    let frameId: number;
+
+    const loop = (now: number) => {
+      const dt = (now - lastTime) / 1000;
+      lastTime = now;
+
+      setCurrentTime(prevTime => {
+        const next = prevTime + dt;
+        if (next >= totalDuration) {
+          setIsPlaying(false);
+          return totalDuration;
+        }
+        return next;
+      });
+
+      frameId = requestAnimationFrame(loop);
+    };
+
+    frameId = requestAnimationFrame(loop);
+    return () => cancelAnimationFrame(frameId);
+  }, [isPlaying, totalDuration, setCurrentTime, setIsPlaying]);
+
   return (
     <div className="flex flex-col h-screen w-screen overflow-hidden bg-gray-950 text-white">
       <TopBar />
+      {/* ... rest unchanged ... */}
 
       <div className="flex flex-1 overflow-hidden">
         {/* Left: Keyframe panel */}

@@ -53,7 +53,7 @@ export async function validateToken(token: string): Promise<boolean> {
 }
 
 /**
- * Start the full render pipeline (Rust → Swift encoder).
+ * Start the full render pipeline (Rust → Remotion renderer).
  * Subscribes to render-progress events and updates store.
  */
 export async function startRender(
@@ -62,8 +62,10 @@ export async function startRender(
   resolution: "1080p" | "4K",
   outputPath: string
 ): Promise<void> {
-  const { setRenderStatus, mapStyleId, mapToken, renderCodec, renderBitrate } = useMapStore.getState();
-  const styleUrl = getStyleUrl(mapStyleId, mapToken);
+  const { 
+    setRenderStatus, mapStyleId, mapToken, 
+    renderCodec, renderBitrate, annotations, terrainEnabled 
+  } = useMapStore.getState();
 
   setRenderStatus({ stage: "computing", encoded: 0, total: 0, fps: 0 });
 
@@ -79,8 +81,10 @@ export async function startRender(
       codec: renderCodec,
       bitrate: renderBitrate,
       outputPath,
-      styleUrl,           // pass active style to Swift WKWebView
-      mapToken,           // pass token for MapTiler styles
+      styleId: mapStyleId,
+      mapToken,
+      annotations,
+      terrainEnabled,
     });
   } catch (err: any) {
     setRenderStatus({

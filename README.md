@@ -1,27 +1,25 @@
 # Cinematic Map
 
-> Tauri + Rust + Swift — M1-optimized cinematic map video renderer
+> Tauri + Rust + Remotion — optimized cinematic map video renderer
 
 ## Week 1 goal: Get the app running ✅
 
 ### Prerequisites
 
 ```bash
-# 1. Xcode Command Line Tools
-xcode-select --install
+# 1. Rust
 
-# 2. Rust
+# 1. Rust
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 source ~/.cargo/env
-rustup target add aarch64-apple-darwin
 
-# 3. Tauri CLI v2
+# 2. Tauri CLI v2
 cargo install tauri-cli --version "^2"
 
-# 4. pnpm
+# 3. pnpm
 npm install -g pnpm
 
-# 5. Node.js 20+
+# 4. Node.js 20+
 nvm install 20 && nvm use 20
 ```
 
@@ -37,14 +35,7 @@ pnpm install
 pnpm dev
 ```
 
-### Build Swift encoder (required for render)
-
-```bash
-cd packages/swift-encoder
-swift build -c release
-# Binary output: .build/release/map-capture
-# Rust will look for it automatically
-```
+---
 
 ---
 
@@ -64,7 +55,7 @@ swift build -c release
 
 | Feature | Status | Notes |
 |---------|--------|-------|
-| Tauri ↔ Swift IPC pipe | ✅ | `cmd_start_render` streams JSON frames to Swift encoder via stdin, reads progress from stderr, emits Tauri events |
+| Tauri ↔ Remotion IPC | ✅ | `cmd_start_render` launches Remotion CLI, streams progress JSON from stderr, emits Tauri events |
 | Drag-to-reorder keyframe times | ✅ | Drag diamonds on timeline to change time; drag-handle in sidebar reorders order |
 | Import JSON config | ✅ | Also restores annotations from saved config |
 | 3D terrain toggle | ✅ | MapTiler DEM tiles + 1.5× exaggeration |
@@ -76,10 +67,8 @@ swift build -c release
 
 | Feature | Status | Notes |
 |---------|--------|-------|
-| Swift WKWebView frame capture | ⚠️ Stub | `renderFrame()` produces gradient placeholder; swap with `WKWebView.takeSnapshot()` |
-| VideoToolbox HEVC encode | ✅ | `VTCompressionSession` with H.265, M1 hardware accelerated, 12 Mbps (1080p) / 40 Mbps (4K) |
-| Metal vignette + color grade | ✅ | `CIVignette` + `CIColorControls` + `CITemperatureAndTint` via CoreImage |
-| Progress bar in UI | ✅ | Real-time events from Rust/Swift → React progress bar in RenderPanel modal |
+| Remotion Renderer | ✅ | `remotion-bundle` + `remotion-render` with Puppeteer. Hardware accelerated HEVC/ProRes output. |
+| Progress bar in UI | ✅ | Real-time events from Rust/Remotion → React progress bar in RenderPanel modal |
 
 ---
 
@@ -139,12 +128,10 @@ cinematic-map/
 │   │       └── index.ts             ← Annotation + RenderStatus types
 │   └── src-tauri/
 │       └── src/
-│           └── lib.rs               ← cmd_start_render: Rust→Swift IPC
+│           └── lib.rs               ← cmd_start_render: Rust→Remotion IPC
 ├── packages/
-│   ├── map-engine/                  ← Rust interpolation (unchanged)
-│   └── swift-encoder/
-│       ├── Package.swift            ← AVFoundation + VideoToolbox + CoreImage
-│       └── Sources/main.swift       ← HEVC encode + Metal post-process
+│   ├── map-engine/                  ← Rust interpolation
+│   └── renderer-remotion/           ← NEW: Remotion rendering pipeline
 └── Cargo.toml
 ```
 
@@ -164,27 +151,6 @@ cinematic-map/
 | `Esc` | Cancel annotation placement |
 
 ---
-
-## Implementing real WKWebView capture (TODO, Week 3)
-
-In `packages/swift-encoder/Sources/main.swift`, replace `renderFrame()` with:
-
-```swift
-import WebKit
-
-// In MapCapture.run():
-let webView = WKWebView(frame: CGRect(x: 0, y: 0, width: width, height: height))
-let mapHTML = buildMapHTML(token: mapToken, style: mapStyle)
-webView.loadHTMLString(mapHTML, baseURL: nil)
-
-// For each camera:
-await webView.evaluateJavaScript("map.jumpTo({center:[\(camera.lng),\(camera.lat)], zoom:\(camera.zoom), pitch:\(camera.pitch), bearing:\(camera.bearing)})")
-await waitForMapIdle(webView)
-let snapshot = await webView.takeSnapshot(with: config)
-let pixelBuffer = snapshotToPixelBuffer(snapshot)
-```
-
-The rendering stub in the current implementation produces synthetic gradient frames so the entire encode pipeline (IPC → VideoToolbox → CoreImage → AVAssetWriter) can be validated before WKWebView integration.
 
 ---
 

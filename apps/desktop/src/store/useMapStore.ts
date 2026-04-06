@@ -54,7 +54,7 @@ interface MapState {
   importConfig: (jsonStr: string) => void;
 
   // Actions — Playback
-  setCurrentTime: (t: number) => void;
+  setCurrentTime: (t: number | ((prev: number) => number)) => void;
   setIsPlaying: (v: boolean) => void;
   setFps: (fps: 30 | 60) => void;
 
@@ -221,7 +221,7 @@ export const useMapStore = create<MapState>()(
       },
 
       // Playback
-      setCurrentTime: (t) => set({ currentTime: t }),
+      setCurrentTime: (t) => set((s) => ({ currentTime: typeof t === "function" ? t(s.currentTime) : t })),
       setIsPlaying: (v) => set({ isPlaying: v }),
       setFps: (fps) => set({ fps }),
 

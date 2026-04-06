@@ -38,59 +38,38 @@ pub struct FrameCamera {
     pub bearing: f64,
 }
 
-#[cfg(not(target_arch = "wasm32"))]
-pub mod render {
-    use super::*;
-    use std::io::Write;
-    use std::num::NonZeroU32;
-    use url::Url;
-    use maplibre_native::ImageRendererBuilder;
+// ── Annotations ────────────────────────────────────────────────────────────
 
-    pub async fn render_to_stream<W: Write>(
-        mut writer: W,
-        keyframes: Vec<Keyframe>,
-        fps: u32,
-        width: u32,
-        height: u32,
-        style_url: String,
-        on_progress: impl Fn(u32, u32),
-    ) -> Result<(), String> {
-        let frames = compute_frames(&keyframes, fps);
-        let total = frames.len() as u32;
-        if total == 0 { return Ok(()); }
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AnnotationType {
+    Text,
+    Callout,
+    Image,
+    Model3d,
+}
 
-        // 1. Initialize MapLibre Native Headless Renderer
-        let mut renderer = ImageRendererBuilder::new()
-            .with_size(
-                NonZeroU32::new(width).ok_or("Width must be non-zero")?,
-                NonZeroU32::new(height).ok_or("Height must be non-zero")?,
-            )
-            .build_static_renderer();
-
-        let url = Url::parse(&style_url).map_err(|e| format!("Invalid Style URL: {e}"))?;
-        renderer.load_style_from_url(&url);
-
-        // 2. Main Loop
-        for (i, frame) in frames.iter().enumerate() {
-            // Render the frame
-            let image = renderer.render_static(
-                frame.lat,
-                frame.lng,
-                frame.zoom,
-                frame.bearing,
-                frame.pitch
-            ).map_err(|e| format!("Render failed at frame {i}: {e}"))?;
-
-            // 3. Output raw bytes to the stream
-            // image.as_image() returns &ImageBuffer<Rgba<u8>, Vec<u8>>
-            let raw_data = image.as_image().as_raw();
-            writer.write_all(raw_data).map_err(|e| format!("Pipe write error: {e}"))?;
-            
-            on_progress(i as u32 + 1, total);
-        }
-
-        Ok(())
-    }
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Annotation {
+    pub id: String,
+    pub r#type: AnnotationType,
+    pub lat: f64,
+    pub lng: f64,
+    pub label: String,
+    pub content: Option<String>,
+    pub color: Option<String>,
+    pub font_size: Option<f64>,
+    pub image_url: Option<String>,
+    pub image_width: Option<f64>,
+    pub image_height: Option<f64>,
+    pub model_url: Option<String>,
+    pub model_scale: Option<f64>,
+    pub model_rotation_y: Option<f64>,
+    pub model_altitude: Option<f64>,
+    pub show_from: Option<f64>,
+    pub show_until: Option<f64>,
+    pub visible: Option<bool>,
 }
 
 // ── Public API ─────────────────────────────────────────────────────────────
@@ -153,7 +132,7 @@ fn interpolate_at(kfs: &[Keyframe], t: f64, frame: u32) -> FrameCamera {
     }
 }
 
-fn find_segment<'a>(kfs: &'a [Keyframe], t: f64) -> (&'a Keyframe, &'a Keyframe, f64) {
+fn find_segment(kfs: &[Keyframe], t: f64) -> (&Keyframe, &Keyframe, f64) {
     if t <= kfs[0].time { return (&kfs[0], &kfs[1], 0.0); }
     let last = kfs.len() - 1;
     if t >= kfs[last].time { return (&kfs[last - 1], &kfs[last], 1.0); }

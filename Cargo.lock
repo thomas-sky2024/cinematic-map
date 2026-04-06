@@ -848,7 +848,6 @@ name = "cinematic-map-app"
 version = "0.1.0"
 dependencies = [
  "map-engine",
- "maplibre_native",
  "serde",
  "serde_json",
  "tauri",
